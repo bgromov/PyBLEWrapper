@@ -155,6 +155,20 @@ class OSXBLECharacteristic(Characteristic):
             self._notify = False
         else:
             self.service.peripheral.setNotifyForCharacteristic(value, self.instance)
+        self.handler.on_notification_state(self, self._notify)
+        return self._notify
+
+    @property
+    def notify_async(self):
+        return self._notify
+
+    @notify_async.setter
+    def notify_async(self, value):
+        if not self.properties["notify"]:
+            self._notify = False
+        else:
+            self.service.peripheral.setNotifyForCharacteristicAsync(value, self.instance)
+        # self.handler.on_notification_state(self, self._notify)
         return self._notify
 
     @property
@@ -189,6 +203,38 @@ class OSXBLECharacteristic(Characteristic):
             raise TypeError("data needs to be a bytearray")
         rawdata = NSData.dataWithBytes_length_(data, len(data))
         self.service.peripheral.writeValueForCharacteristic(rawdata, self.instance)
+
+    @property
+    def value_async(self):
+        if self.properties["read"]:
+            self.service.peripheral.readValueForCharacteristicAsync(self.instance)
+        return None
+
+    @value_async.setter
+    def value_async(self, data):
+        if not self.properties["write"]:
+            return
+        # data needs to be byte array
+        if not isinstance(data, bytearray):
+            raise TypeError("data needs to be a bytearray")
+        rawdata = NSData.dataWithBytes_length_(data, len(data))
+        self.service.peripheral.writeValueForCharacteristicAsync(rawdata, self.instance, withResponse=True)
+
+    @property
+    def value_async_nr(self):
+        if self.properties["read"]:
+            self.service.peripheral.readValueForCharacteristicAsync(self.instance)
+        return None
+
+    @value_async_nr.setter
+    def value_async_nr(self, data):
+        if not self.properties["write"]:
+            return
+        # data needs to be byte array
+        if not isinstance(data, bytearray) and not isinstance(data, bytes):
+            raise TypeError("data needs to be a bytearray or bytes")
+        rawdata = NSData.dataWithBytes_length_(data, len(data))
+        self.service.peripheral.writeValueForCharacteristicAsync(rawdata, self.instance, withResponse=False)
 
     @property
     def description(self):

@@ -211,7 +211,7 @@ def Trace(*args, **kwargs):
 class LoggerObject(object):
     def __init__(self, traceit=False):
         # signal
-        signal.signal(signal.SIGTERM, self.__class__.signal_handler)
+        # signal.signal(signal.SIGTERM, self.__class__.signal_handler)
         # tracing
         if traceit:
             print self.__class__.__name__, "in trace"
@@ -221,7 +221,7 @@ class LoggerObject(object):
         # logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger("%s.%s" % (self.__class__.__module__, self.__class__.__name__))
-        self.logger.setLevel(logging.INFO)
+        self.logger.setLevel(logging.ERROR)
         self._debug = False
         self.trace = TraceObject()
 

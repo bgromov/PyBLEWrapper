@@ -1,6 +1,7 @@
 from objc import *
 from Foundation import *
 from IOBluetooth import *
+import libdispatch
 
 from pyble._roles import Central, Peripheral
 from peripheral import OSXPeripheral
@@ -14,6 +15,10 @@ from datetime import datetime, timedelta
 from pyble.patterns import Trace
 from threading import Thread, Condition, Event
 from functools import wraps
+import struct
+
+import inspect
+import traceback
 
 class BLETimeoutError(Exception):
     def __init__(self, message=""):
@@ -47,13 +52,16 @@ class OSXCentralManager(NSObject, Central):
         self.trace.traceInstance(self)
         # initialize manager with delegate
         self.logger.info("Initialize CBCentralManager")
-        self.manager = CBCentralManager.alloc().initWithDelegate_queue_(self, nil)
+
+        self.central_queue = libdispatch.dispatch_get_global_queue(libdispatch.DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)
+        self.manager = CBCentralManager.alloc().initWithDelegate_queue_(self, self.central_queue)
 
         self.scanedList = []
         self.connectedList = []
         self.BLEReady_callback = None
         self.BLEAvailableList_callback = None
         self.BLEConnectedList_callback = None
+        self.BLEDiscover_callback = None
 
         self.cv = Condition()
         self.ready = False
@@ -111,7 +119,8 @@ class OSXCentralManager(NSObject, Central):
         if self.BLEAvailableList_callback:
             try:
                 self.BLEAvailableList_callback(self.scanedList)
-            except:
+            except Exception as e:
+                raise e
                 pass
 
     @python_method
@@ -141,6 +150,7 @@ class OSXCentralManager(NSObject, Central):
     @python_method
     def stop(self):
         self._stop.set()
+
 
     @python_method
     def startScan(self, withServices=[], timeout=5, numOfPeripherals=1, allowDuplicates=False):
@@ -174,7 +184,8 @@ class OSXCentralManager(NSObject, Central):
                         self.scanedList = []
                         for service in withServices:
                             for p in tmpList:
-                                if service in p.advServiceUUIDs:
+                                canonical_service_name = CBUUID.UUIDWithString_(service).UUIDString()
+                                if canonical_service_name in p.advServiceUUIDs:
                                     self.scanedList.append(p)
                 if numOfPeripherals > 0 and len(self.scanedList) >= numOfPeripherals:
                     self.logger.info("Found %s peripherals." % len(self.scanedList))
@@ -185,7 +196,26 @@ class OSXCentralManager(NSObject, Central):
         if len(self.scanedList):
             return self.scanedList[0]
         return None
- 
+
+    @python_method
+    def startScanAsync(self, allowDuplicates=False):
+        print(inspect.currentframe().f_code.co_name)
+        self.logger.debug("Start Scan Async")
+
+        if len(self.scanedList):
+            del self.scanedList
+        self.scanedList = []
+
+        if allowDuplicates:
+            value = NSNumber.numberWithBool_(YES)
+        else:
+            value = NSNumber.numberWithBool_(NO)
+        options = NSDictionary.dictionaryWithObject_forKey_(
+            value,
+            CBCentralManagerScanOptionAllowDuplicatesKey
+        )
+        self.manager.scanForPeripheralsWithServices_options_(nil, options)
+
     @python_method
     def stopScan(self):
         self.logger.debug("Stop Scan")
@@ -203,7 +233,7 @@ class OSXCentralManager(NSObject, Central):
     @_waitResp
     def retrieveConnectedPeripherals(self):
         self.logger.info("Deprecated in OSX v10.9.")
-        return 
+        return
 #        self.manager.retrieveConnectedPeripherals()
 
     @python_method
@@ -227,24 +257,27 @@ class OSXCentralManager(NSObject, Central):
         self.updateAvailableList()
 
     @python_method
-    def retrievePeriphersWithIdentifiers(self, identifiers):
+    def retrievePeripheralsWithIdentifiers(self, identifiers):
         if not isinstance(identifiers, list) and isinstance(identifiers, str):
             identifiers = list(identifiers.split())
         known_identifiers = NSMutableArray.alloc().init()
         for identifier in identifiers:
-            UUID = NSUUID.alloc().UUIDWithString_(identifer)
+            UUID = NSUUID.alloc().initWithUUIDString_(identifier)
             if UUID is not nil:
                 known_identifiers.addObject_(UUID)
         peripherals = self.manager.retrievePeripheralsWithIdentifiers_(known_identifiers)
+        ret = []
         for p in peripherals:
             if not self.findPeripheralFromList(p, self.scanedList):
                 temp = OSXPeripheral.alloc().init()
                 temp.instance = p
                 temp.UUID = uuid.UUID(p._.identifier.UUIDString())
                 temp.name=p._.name
+                ret.append(temp)
                 self.scanedList.append(temp)
         # update lists
         self.updateAvailableList()
+        return ret
 
     @python_method
     def connectPeripheral(self, peripheral):
@@ -268,7 +301,30 @@ class OSXCentralManager(NSObject, Central):
         if peripheral in self.connectedList:
             return peripheral
         return None
- 
+
+    @python_method
+    def connectPeripheralAsync(self, peripheral):
+        # with self.cv:
+        self.ready = False
+        self.logger.debug("Connecting to Peripheral: " + str(peripheral))
+        options = NSDictionary.dictionaryWithObject_forKey_(
+                    NSNumber.numberWithBool_(YES),
+                    CBConnectPeripheralOptionNotifyOnDisconnectionKey
+                  )
+        peripheral.state = Peripheral.CONNECTING
+        self.manager.connectPeripheral_options_(peripheral.instance, options)
+
+        #     while True:
+        #         self.cv.wait(0)
+        #         NSRunLoop.currentRunLoop().runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.distantPast())
+        #         if self.ready == True:
+        #             break
+
+        # # return the newly added peripheral
+        # if peripheral in self.connectedList:
+        #     return peripheral
+        # return None
+
     @python_method
     def disconnectAllPeripherals(self):
         self.logger.debug("Disconnecting all Peripherals")
@@ -353,6 +409,7 @@ class OSXCentralManager(NSObject, Central):
     @_notifyResp
     def didDiscoverPeripheral(self, central, peripheral, advertisementData, rssi):
         temp = OSXPeripheral.alloc().init()
+
         idx = -1
         p = None
         try:
@@ -374,11 +431,14 @@ class OSXCentralManager(NSObject, Central):
         if CBAdvertisementDataLocalNameKey in advertisementData:
             p.advLocalName = advertisementData[CBAdvertisementDataLocalNameKey]
         #   manufacturer data
-        if CBAdvertisementDataManufacturerDataKey in advertisementData: 
-            p.advManufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey]
+        if CBAdvertisementDataManufacturerDataKey in advertisementData:
+            p.advManufacturerData = bytearray(advertisementData[CBAdvertisementDataManufacturerDataKey])
+            company_id = struct.unpack('<1H', p.advManufacturerData[0:2])
+            mf_data = p.advManufacturerData[2:]
+            p.advManufacturerDataByCompanyID[company_id] = mf_data
         #   provided services UUIDs
-        if CBAdvertisementDataServiceUUIDsKey in advertisementData: 
-            p.advServiceUUIDS = []
+        if CBAdvertisementDataServiceUUIDsKey in advertisementData:
+            p.advServiceUUIDs = []
             UUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey]
             for UUID in UUIDs:
                 p.advServiceUUIDs.append(CBUUID2String(UUID._.data))
@@ -394,7 +454,7 @@ class OSXCentralManager(NSObject, Central):
             UUIDs = advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey]
             for UUID in UUIDs:
                 p.advOverflowServiceUUIDs.append(CBUUID2String(UUID._.data))
-        #   IsConnectable 
+        #   IsConnectable
         if CBAdvertisementDataIsConnectable in advertisementData:
             p.advIsConnectable = advertisementData[CBAdvertisementDataIsConnectable]
         #   SolicitedServiceUUIDs
@@ -423,7 +483,7 @@ class OSXCentralManager(NSObject, Central):
     @_notifyResp
     def didRetrieveConnectedPeripherals(self, central, peripherals):
         self.logger.info("Deprecated in OSX v10.9.")
-        return 
+        return
         self.logger.info("didRetrieveConnectedPeripherals")
         for p in peripherals:
             print p

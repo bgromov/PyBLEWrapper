@@ -21,6 +21,7 @@ class PeripheralHandler(object):
         self.UUID = UUID
         # copy over all existing profile handlers
         self.profile_handlers = dict(ProfileHandler.handlers)
+        self.handlers_instances = dict()
 
     @property
     def handlers(self):
@@ -32,11 +33,19 @@ class PeripheralHandler(object):
     def __getitem__(self, key, default=None):
         try:
             handler_cls = self.profile_handlers[key]
-            return handler_cls()
+            if key in self.handlers_instances:
+                return self.handlers_instances[key]
+            else:
+                self.handlers_instances[key] = handler_cls()
+                return handler_cls()
         except KeyError:
             if "*" in self.profile_handlers:
                 handler_cls = self.profile_handlers["*"]
-                return handler_cls()
+                if "*" in self.handlers_instances:
+                    return self.handlers_instances["*"]
+                else:
+                    self.handlers_instances["*"] = handler_cls()
+                    return handler_cls()
             else:
                 return default
 
@@ -149,6 +158,9 @@ class ProfileHandler(object):
         pass
 
     def on_notify(self, characteristic, data):
+        pass
+
+    def on_notification_state(self, characteristic, data):
         pass
 
     def on_write(self, characteristic, data):

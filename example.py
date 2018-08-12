@@ -90,21 +90,29 @@ class MyPeripheral(PeripheralHandler):
 
 def main():
     cm = pyble.CentralManager()
+    print 'Checkpoint 1'
     if not cm.ready:
         return
     target = None
     while True:
         try:
 #            target = cm.startScan(withServices=["180D"])
+            print 'Checkpoint 2'
             target = cm.startScan()
+            print 'Checkpoint 3'
             if target and target.name == "EcoZe1":
 #            if target:
                 print target
                 break
         except Exception as e:
             print e
+
+    print 'Checkpoint 4'
     target.delegate = MyPeripheral
     p = cm.connectPeripheral(target)
+
+    print 'Checkpoint 5'
+
     for service in p:
         #        if service.UUID == "FFF0":
 #            continue

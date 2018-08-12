@@ -17,6 +17,7 @@ from threading import Condition
 from functools import wraps
 
 from pyble.patterns import Trace
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class OSXPeripheral(NSObject, Peripheral):
         # advertisement data
         self.advLocalName = None
         self.advManufacturerData = None
+        self.advManufacturerDataByCompanyID = {}
         self.advServiceUUIDs = []
         self.advServiceData = None
         self.advOverflowServiceUUIDs = []
@@ -125,7 +127,7 @@ class OSXPeripheral(NSObject, Peripheral):
             self.ready = True
             with self.cv:
                 try:
-                    self.cv.notifyAll()
+                    self.cv.notify()
                 except Exception as e:
                     print e
         return wrapper
@@ -150,6 +152,10 @@ class OSXPeripheral(NSObject, Peripheral):
     def readValueForCharacteristic(self, characteristic):
         self.instance.readValueForCharacteristic_(characteristic)
 
+    @python_method
+    def readValueForCharacteristicAsync(self, characteristic):
+        self.instance.readValueForCharacteristic_(characteristic)
+
     @_waitResp
     def readValueForDescriptor(self, descriptor):
         self.instance.readValueForDescriptor_(descriptor)
@@ -159,8 +165,17 @@ class OSXPeripheral(NSObject, Peripheral):
         writeType = CBCharacteristicWriteWithResponse if withResponse else CBCharacteristicWriteWithoutResponse
         self.instance.writeValue_forCharacteristic_type_(value, characteristic, writeType)
 
+    @python_method
+    def writeValueForCharacteristicAsync(self, value, characteristic, withResponse=True):
+        writeType = CBCharacteristicWriteWithResponse if withResponse else CBCharacteristicWriteWithoutResponse
+        self.instance.writeValue_forCharacteristic_type_(value, characteristic, writeType)
+
     @_waitResp
     def setNotifyForCharacteristic(self, flag, characteristic):
+        self.instance.setNotifyValue_forCharacteristic_(flag, characteristic)
+
+    @python_method
+    def setNotifyForCharacteristicAsync(self, flag, characteristic):
         self.instance.setNotifyValue_forCharacteristic_(flag, characteristic)
 
     @python_method
@@ -263,6 +278,8 @@ class OSXPeripheral(NSObject, Peripheral):
             c._value = value
             if c.notify:
                 c.handler.on_notify(c, value)
+            else:
+                c.handler.on_read(c, value)
             self.logger.debug("%s:%s:%s updated value: %s" % (p, s, c, pformat(value)))
         else:
             self.logger.debug("%s:%s:%s %s" % (p, s, c, str(error)))
@@ -295,6 +312,7 @@ class OSXPeripheral(NSObject, Peripheral):
         s = self.findServiceByCharacteristicInstance(characteristic)
         p = s.peripheral
         c = s.findCharacteristicByInstance(characteristic)
+        c.handler.on_write(c, None)
         if error == nil:
             self.logger.debug("Characteristic Value Write Done")
         else:
@@ -322,6 +340,8 @@ class OSXPeripheral(NSObject, Peripheral):
             c._notify = False
         else:
             c._notify = True
+
+        c.handler.on_notification_state(self, c._notify)
         self.logger.debug("%s:%s:%s set Notification %s" % (p, s, c, result))
 
     # Retrieving a Peripheral's Received Signal Strength Indicator(RSSI) Data

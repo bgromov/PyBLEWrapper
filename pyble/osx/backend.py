@@ -105,7 +105,7 @@ class OSXPeripheralApp(OSXCmd):
                 print " ", c
                 print "    Description: ", c.description
                 print "    Value      : ", c.value
-            
+
         elif len(arglist) == 2:
             # read a char in profile
             pUUID = arglist[0]
@@ -228,7 +228,7 @@ class OSXCentralManagerApp(OSXCmd):
         return True
 
     def do_scan(self, args):
-        """Scan available peripherals 
+        """Scan available peripherals
         """
         seconds = 3
         num = 1
